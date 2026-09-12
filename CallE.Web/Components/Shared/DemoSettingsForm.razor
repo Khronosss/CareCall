@@ -1,0 +1,140 @@
+@using System.ComponentModel.DataAnnotations
+@inject DemoSettingsService Settings
+@inject ILogger<DemoSettingsForm> Logger
+
+@if (_view is null)
+{
+    <HeartbeatLoader Message="Loading demo settings..." />
+}
+else
+{
+    <div class="setup-content">
+        @if (_view.Warning is not null)
+        {
+            <div class="alert alert-warning" role="alert">@_view.Warning</div>
+        }
+        @if (_error is not null)
+        {
+            <div class="alert alert-danger" role="alert">@_error</div>
+        }
+        @if (_saved)
+        {
+            <div class="alert alert-success" role="status">Settings saved. All existing patients now use the demo phone number.</div>
+        }
+        @if (_scheduledCall is { } scheduledCall)
+        {
+            <div class="alert alert-info" role="status">
+                Demo call: <strong>@scheduledCall.PatientName</strong>,
+                scheduled for <strong>@scheduledCall.CallAtUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm:ss")</strong> (server local time).
+            </div>
+        }
+
+        <section class="setup-form">
+            <EditForm Model="_input" OnValidSubmit="SaveAsync" FormName="demo-settings">
+                <DataAnnotationsValidator />
+                <ValidationSummary />
+                <fieldset disabled="@_saving">
+                    <legend class="visually-hidden">Demo connection</legend>
+                    <div class="mb-3">
+                        <label for="calle-key" class="form-label">CALL-E API key</label>
+                        <InputText id="calle-key" type="password" class="form-control" @bind-Value="_input.NewApiKey"
+                                   autocomplete="new-password" maxlength="4096" aria-describedby="key-help" />
+                        <div id="key-help" class="form-text">
+                            @(_view.HasApiKey ? "Key configured. Leave blank to keep it." : "Required to enable calls. Stored securely on the server.")
+                        </div>
+                        <ValidationMessage For="() => _input.NewApiKey" />
+                    </div>
+                    <div class="mb-3">
+                        <label for="demo-phone" class="form-label">Test phone number</label>
+                        <InputText id="demo-phone" type="tel" class="form-control" @bind-Value="_input.PhoneNumber"
+                                   autocomplete="tel" placeholder="+34600000000" aria-describedby="phone-help" />
+                        <div id="phone-help" class="form-text">International format, e.g. +34600000000. <strong>All patient calls will go to this test number.</strong> Saving replaces every existing patient's phone number.</div>
+                        <ValidationMessage For="() => _input.PhoneNumber" />
+                    </div>
+                    <div class="form-check mb-3">
+                        <InputCheckbox id="automatic-calls" class="form-check-input" @bind-Value="_input.AutomaticCallsEnabled" />
+                        <label for="automatic-calls" class="form-check-label">Enable automatic calls</label>
+                    </div>
+                    @if (_input.AutomaticCallsEnabled)
+                    {
+                        <div class="alert alert-warning" role="status">
+                            Calls use real quota. Enabling automation schedules an eligible call one minute after saving; other overdue calls may start immediately.
+                        </div>
+                    }
+                    <div class="form-check mb-4">
+                        <InputCheckbox id="confirm-demo" class="form-check-input" @bind-Value="_input.ConfirmRealCalls" />
+                        <label for="confirm-demo" class="form-check-label">I control this number and authorize real calls and replacement of patient phone numbers.</label>
+                    </div>
+                    <details class="mb-3">
+                        <summary>More about demo calls</summary>
+                        <p class="form-text">Settings apply to this shared demo and survive restarts. Calls require valid credentials and quota, which saving does not verify. The scheduler checks every 30 seconds; saving while already enabled does not restart the countdown. Overdue calls can run after a restart.</p>
+                        <p class="form-text">Disabling automation stops new scheduled calls, not calls already submitted or manual calls. Manual-call simulation and clinical AI configuration are unchanged.</p>
+                    </details>
+                    <div class="d-flex justify-content-end gap-2">
+                        @if (OnCancel.HasDelegate)
+                        {
+                            <button type="button" class="btn btn-secondary" @onclick="() => OnCancel.InvokeAsync()">Cancel</button>
+                        }
+                        <button type="submit" class="btn btn-primary" disabled="@_saving">
+                            @(_saving ? "Saving..." : "Save")
+                        </button>
+                    </div>
+                </fieldset>
+            </EditForm>
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter] public EventCallback<DemoCallSchedule?> OnSaved { get; set; }
+    [Parameter] public EventCallback OnCancel { get; set; }
+    [Parameter] public EventCallback<bool> SavingChanged { get; set; }
+
+    private DemoSettingsInput _input = new();
+    private DemoSettingsView? _view;
+    private DemoCallSchedule? _scheduledCall;
+    private bool _saving;
+    private bool _saved;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _view = await Settings.GetAsync();
+        _input.PhoneNumber = _view.PhoneNumber;
+        _input.AutomaticCallsEnabled = _view.AutomaticCallsEnabled;
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_saving) return;
+        _saving = true;
+        await SavingChanged.InvokeAsync(true);
+        _saved = false;
+        _error = null;
+        _scheduledCall = null;
+        try
+        {
+            _scheduledCall = await Settings.SaveAsync(_input);
+            _input.ConfirmRealCalls = false;
+            _view = await Settings.GetAsync();
+            _saved = true;
+        }
+        catch (ValidationException ex)
+        {
+            _error = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Could not save demo settings.");
+            _error = "Settings could not be saved. Check the server logs and try again.";
+        }
+        finally
+        {
+            _input.NewApiKey = null;
+            _saving = false;
+            await SavingChanged.InvokeAsync(false);
+        }
+        if (_saved)
+            await OnSaved.InvokeAsync(_scheduledCall);
+    }
+}

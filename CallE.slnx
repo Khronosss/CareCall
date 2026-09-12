@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="CallE.Core/CallE.Core.csproj" />
+  <Project Path="CallE.Web/CallE.Web.csproj" />
+  <Project Path="CallE.Tests/CallE.Tests.csproj" />
+</Solution>
